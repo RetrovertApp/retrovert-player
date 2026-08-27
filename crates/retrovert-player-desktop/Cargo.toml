@@ -1,0 +1,17 @@
+[package]
+name = "retrovert-player-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+cpal = "0.15"
+env_logger = "0.11"
+log = "0.4"
+retrovert-host.workspace = true
+retrovert-player.workspace = true
+retrovert-plugin-catalog = { path = "../retrovert-plugin-catalog" }
+
+[lints]
+workspace = true

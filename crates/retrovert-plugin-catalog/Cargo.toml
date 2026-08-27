@@ -1,0 +1,23 @@
+[package]
+name = "retrovert-plugin-catalog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+log = "0.4"
+retrovert-player.workspace = true
+retrovert-updater.workspace = true
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tar = "0.4"
+zstd = "0.13"
+
+[dev-dependencies]
+retrovert-host.workspace = true
+tempfile = "3"
+
+[lints]
+workspace = true
