@@ -20,6 +20,20 @@ const ARCHIVE_SUFFIX: &str = ".tar.zst";
 /// generation id, so a crashed extraction cannot shadow one.
 const STAGING_PREFIX: &str = ".staging-";
 
+/// Refuse an artifact name that would not be a single path segment.
+///
+/// The name becomes one, in the library path and nowhere else, so a name
+/// carrying separators or `..` would place the load outside the tree. The
+/// manifest checks `artifact.path` for the same reason but leaves `name` to
+/// whoever puts it on the filesystem, which is here.
+fn check_name(name: &str) -> Result<(), String> {
+    let plain = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+    if name.is_empty() || !name.chars().all(plain) {
+        return Err(format!("artifact name is not a plain path segment: {name}"));
+    }
+    Ok(())
+}
+
 pub(crate) struct PayloadStore {
     root: PathBuf,
 }
@@ -58,6 +72,9 @@ impl PayloadStore {
         generation_dir: &Path,
         artifacts: &[Installed],
     ) -> Result<Vec<PathBuf>, String> {
+        for artifact in artifacts {
+            check_name(&artifact.name)?;
+        }
         let dir = self.dir_of(id);
         if !dir.is_dir() {
             self.extract(id, generation_dir, artifacts)?;
@@ -108,7 +125,13 @@ impl PayloadStore {
             // tree, but it creates symlinks with their target verbatim, so the
             // tree can still contain a link that points out of it. `ensure`
             // rejects a library that is not a regular file for that reason.
-            tar::Archive::new(decoder)
+            let mut unpacker = tar::Archive::new(decoder);
+            // Every artifact in the generation unpacks into this one tree, so
+            // without this the last writer wins and one artifact's archive can
+            // replace another's library. Refusing the collision fails the whole
+            // generation, which is the safe direction.
+            unpacker.set_overwrite(false);
+            unpacker
                 .unpack(&staging)
                 .map_err(|e| format!("could not unpack {}: {e}", archive.display()))?;
         }
@@ -260,6 +283,50 @@ mod tests {
             refused.is_err(),
             "a symlinked library must not load: {refused:?}"
         );
+    }
+
+    #[test]
+    fn an_artifact_name_that_is_not_a_path_segment_is_refused() {
+        for name in ["../escape", "sub/dir", "", "spu\\win", "spu:alt", "."] {
+            assert!(check_name(name).is_err(), "{name:?} must not reach a path");
+        }
+        for name in ["spu", "openmpt", "sc68-alt", "v2m_2"] {
+            assert!(check_name(name).is_ok(), "{name:?} is a real plugin name");
+        }
+    }
+
+    #[test]
+    fn two_artifacts_claiming_the_same_file_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let generation_dir = dir.path().join("generation");
+        fs::create_dir_all(&generation_dir).unwrap();
+        // Each artifact ships its own library, so both are present either way.
+        // uade's archive also carries spu's: without the collision check that
+        // copy silently replaces the real one and the load still counts clean.
+        fs::write(
+            generation_dir.join("spu.tar.zst"),
+            archive_with(&[(&lib_name("spu"), b"the real spu")]),
+        )
+        .unwrap();
+        fs::write(
+            generation_dir.join("uade.tar.zst"),
+            archive_with(&[
+                (&lib_name("uade"), b"uade"),
+                (&lib_name("spu"), b"an impostor"),
+            ]),
+        )
+        .unwrap();
+
+        let store = PayloadStore::new(dir.path().join("payloads"));
+        let refused = store.ensure(
+            "gen-a",
+            &generation_dir,
+            &[
+                installed("spu", "spu.tar.zst"),
+                installed("uade", "uade.tar.zst"),
+            ],
+        );
+        assert!(refused.is_err(), "a collision must fail: {refused:?}");
     }
 
     #[test]
